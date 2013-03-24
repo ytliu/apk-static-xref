@@ -3,142 +3,22 @@ require 'pathname'
 require 'pp'
 require 'graphviz'
 
-class Smali_Function
-
-  TYPE_STR = {
-    'V'=>'void',
-    'Z'=>'boolean',
-    'B'=>'byte',
-    'S'=>'short',
-    'C'=>'char',
-    'I'=>'int',
-    'J'=>'long',
-    'F'=>'float',
-    'D'=>'double'
-  }
-
-  def initialize
-    @cls = nil
-    @mtd = nil
-    @pty = nil
-    @rettype = nil
-    @para = []
-  end
-
-  # Method parameters types
-  def extractCallParameters(line)
-    useful_parts = line.split(' ')[-1][1..-1]
-    para_str = useful_parts.split('(')[1].split(')')[0]
-    temp_para = Array.new
-    array = false
-    while para_str.length > 0
-      i = 0
-      if i < para_str.length
-        if para_str[i] == 'L'
-          while (para_str[i] != ';') and (i < para_str.length)
-            i += 1
-          end
-          if array
-            temp_para << (para_str[1...i] + "[]")
-            array = false
-          else
-            temp_para << para_str[1...i]
-          end
-          para_str = para_str[i+1..-1]
-        elsif para_str[i] == '['
-          array = true
-          while para_str[i] == '['
-            i += 1
-          end
-          para_str = para_str[i..-1]
-        else
-          value = TYPE_STR[para_str[i]]
-          if array
-            temp_para << (value + "[]")
-            array = false
-          else
-            temp_para << value
-          end
-          para_str = para_str[i+1..-1]
-        end
-      end
-    end
-    @para = temp_para 
-  end
-
-  # Method return type
-  def extractReturnType(line)
-    useful_parts = line.split(' ')[-1][1..-1]
-    retval = line.split(')')[1]
-    ## TODO: and.. what about array on return types?
-    value = (retval.length == 1) ? TYPE_STR[retval] : retval[1...-1]
-    @rettype = value
-  end
-
-  # Method proto
-  def extractProto(line)
-    useful_parts = line.split(' ')[-1]
-    @pty = "(" + useful_parts.split('(')[-1]
-  end
-
-  def str
-    "#{@cls}->#{@mtd}#{@pty}"
-  end
-end
-
-class Invoked < Smali_Function
-  attr_reader :cls, :mtd, :pty
-  def initialize(smali_invoke_line)
-    super()
-    extractOwnerClass(smali_invoke_line)
-    extractMethodName(smali_invoke_line)
-    extractProto(smali_invoke_line)
-    extractCallParameters(smali_invoke_line)
-    extractReturnType(smali_invoke_line)
-  end
-
-  # Method class owner extractor
-  def extractOwnerClass(line)
-    useful_parts = line.split(' ')[-1][1..-1]
-    @cls = useful_parts.split('-')[0][0...-1]
-  end
-
-  #Method name extractor
-  def extractMethodName(line)
-    useful_parts = line.split(' ')[-1]
-    useful_parts = useful_parts.split('->')[1]
-    @mtd = useful_parts.split('(')[0]
-  end
-end
-
-class Invoker < Smali_Function
-  attr_reader :cls, :mtd, :pty
-  def initialize(cls, smali_line)
-    super()
-    @cls = cls
-    extractMethodName(smali_line)
-    extractProto(smali_line)
-    extractCallParameters(smali_line)
-    extractReturnType(smali_line)
-  end
-
-  #Method name extractor
-  def extractMethodName(line)
-    useful_parts = line.split(' ')[-1]
-    @mtd = useful_parts.split('(')[0]
-  end
-end
-
 THIS_FILE = Pathname.new(__FILE__).realpath.to_s
 HERE = File.dirname(THIS_FILE)
 
 require "#{HERE}/apk"
+require "#{HERE}/smali"
 
 cmds = [
 	"info", "xref"
 ]
 
+cpts = [
+  "service", "activity"
+]
+
 cmd = ""
+cpt = ""
 cls = nil
 mtd = nil
 pty = nil
@@ -155,6 +35,8 @@ $caller_methods = Array.new
 # Create a new graph
 $graph = GraphViz.new( :G, :type => :digraph )
 
+$libapis = Hash.new
+
 def close(apk)
   apk.clean if apk
 end
@@ -165,7 +47,7 @@ def addNodes(n1, n2)
   $graph.add_edges(node1, node2)
 end
 
-def run_assign(apk, cls, mtd, pty)
+def run_assign(apk, cls, mtd, pty, flag, ori_cls)
   match = 0
   caller = nil
   callee = nil
@@ -174,6 +56,12 @@ def run_assign(apk, cls, mtd, pty)
   if File.file?(filename)
     fh = File.open(filename, "r")
   else
+    if !$libapis[ori_cls].include?("#{cls}->#{mtd}#{pty}")
+      if $verbose
+        pp "#{cls}->#{mtd}#{pty}"
+      end
+      $libapis[ori_cls] << "#{cls}->#{mtd}#{pty}"
+    end
     return
   end
   lines = fh.readlines
@@ -190,21 +78,21 @@ def run_assign(apk, cls, mtd, pty)
       match = 0
     elsif line.include?("invoke-")
       callee = Invoked.new(line)
-      if match == 1
+      if (match == 1) or (flag == 1)
         if $caller_methods.include?(callee.str)
           if !$caller_methods.include?(caller.str)
             addNodes(caller.str, callee.str) if $graph_need
             if $verbose
-              pp "#{caller.str} : #{callee.str}"
+              #pp "#{caller.str} : #{callee.str}"
             end
           end
         else
           addNodes(caller.str, callee.str) if $graph_need
           if $verbose
-            pp "#{caller.str} : #{callee.str}"
+            #pp "#{caller.str} : #{callee.str}"
           end
           $caller_methods << caller.str
-          run_assign(apk, callee.cls, callee.mtd, callee.pty)
+          run_assign(apk, callee.cls, callee.mtd, callee.pty, 0, ori_cls)
         end
       end
     end
@@ -219,18 +107,25 @@ def get_proto(line)
   "(#{line.split(' ')[-1].split('(')[-1]}"
 end
 
-def run_all(apk)
-  services = apk.services
-  if services.size == 0
-    pp "no service in #{ARGV[0]}"
+def run_all(apk, cpt)
+  if cpt.eql?("service")
+    components = apk.services
+  elsif cpt.eql?("activity")
+    components = apk.activities
+  else
+    components = apk.services
+    components.concat(apk.activities)
+  end
+  if components.size == 0
+    pp "no components in #{ARGV[0]}"
     close(apk) 
     exit
   end
-  services.each { |serv|
+  components.each { |component|
     if $verbose
-      pp "====== process service - #{serv} ======"
+      pp "====== process components - #{component} ======"
     end
-    cls = serv.gsub('.', '/')
+    cls = component.gsub('.', '/')
     methods = Hash.new
     filename = apk.smali + cls + ".smali"
     if File.file?(filename)
@@ -238,6 +133,7 @@ def run_all(apk)
     else
       next
     end
+    $libapis[cls] = Array.new
     lines = fh.readlines
     lines.each { |line|
       line = line[0...-1]
@@ -255,7 +151,7 @@ def run_all(apk)
         if $caller_methods.include?(caller)
           next
         else
-          run_assign(apk, cls, mtd, pty)
+          run_assign(apk, cls, mtd, pty, 0, cls)
         end
         
       }
@@ -264,9 +160,12 @@ def run_all(apk)
 end
 
 option_parser = OptionParser.new do |opts|
-  opts.banner = "Usage: ruby #{THIS_FILE} target.(apk|xml) [options]"
+  opts.banner = "Usage: ruby #{THIS_FILE} target.apk [options]"
   opts.on("--cmd command", cmds, cmds.join(", ")) do |c|
     cmd = c
+  end
+  opts.on("--cpt component", cpts, cpts.join(", ")) do |c|
+    cpt = c
   end
   opts.on("--cls class", "target class for xref.") do |c|
     cls = c
@@ -297,12 +196,16 @@ end.parse!
 
 if (cmd == "xref") and assign
 	raise "--cls is mandatory" if !cls
-	raise "--mtd is mandatory" if !mtd
-	raise "--pty is mandatory" if !pty
+	# raise "--mtd is mandatory" if !mtd
+	# raise "--pty is mandatory" if !pty
 end
 
 if not cmds.include?(cmd)
 	raise "wrong command"
+end
+
+if !cpt.eql?("") and !cpts.include?(cpt)
+  raise "wrong component"
 end
 
 case File.extname(ARGV[0])
@@ -315,19 +218,26 @@ when ".apk"
     close(apk)
     raise "unpacking apk failed"
   end
-when ".xml"
-	services = parse(ARGV[0])
 else
 	raise "wrong file extension"
 end
 
 case cmd
 when "info"
+  pp "services:"
+  pp apk.services
+  pp "activities:"
+  pp apk.activities
 when "xref"
   if assign
-    run_assign(apk, cls, mtd, pty)
+    $libapis[cls] = Array.new
+    if mtd == nil or pty == nil
+      run_assign(apk, cls, mtd, pty, 1, cls)
+    else
+      run_assign(apk, cls, mtd, pty, 0, cls)
+    end
   else
-    run_all(apk)
+    run_all(apk, cpt)
   end
 end
 
