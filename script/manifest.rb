@@ -64,13 +64,17 @@ class Manifest
     services = @doc.xpath(SVCV)
     services.each do |service|
       svc = service[ANDNAME]
-      @svc << (svc.start_with?('.') ? @pkg + svc : svc)
+      if svc != nil
+	@svc << (svc.start_with?('.') ? @pkg + svc : svc)
+      end
     end
     @aty = Array.new
     activities = @doc.xpath(ACTV)
     activities.each do |activity|
       aty = activity[ANDNAME]
-      @aty << (aty.start_with?('.') ? @pkg + aty : aty)
+      if aty != nil
+	@aty << (aty.start_with?('.') ? @pkg + aty : aty)
+      end
     end
     @out = ""
   end
