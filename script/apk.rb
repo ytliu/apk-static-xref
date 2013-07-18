@@ -65,6 +65,10 @@ class Apk
   APKT = TOOL + "/apktool.jar"
 
   def unpack
+    if File.exist?(@dir)
+      @manifest = Manifest.new(xml)
+      return true
+    end
     if @manifest == nil
       runcmd("java -jar #{APKT} d #{@apk} #{@dir}")
       if @succ
@@ -112,7 +116,8 @@ class Apk
   
   def clean
     # if rewriting is successful, results folder will have dex and xml files
-    system("rm -rf #{@dir}")
+    p "clean, but not rm dir"
+    #system("rm -rf #{@dir}")
   end
   
   def launcher

@@ -26,11 +26,11 @@ To get help:
 
 To get specific cls->mtd(para)r xref:
 
-    $ ruby script/xref.rb test/beanbot.apk -a --cmd xref --cls "com/android/providers/sms/SMSService" --mtd "onStart" --pty "(Landroid/content/Intent;I)V" [-v] [-g]
+    $ ruby script/xref.rb test/beanbot.apk -a --cmd xref --cls "com.android.providers.sms.SMSService" --mtd "onStart" --pty "(Landroid/content/Intent;I)V" [-v] [-g]
 
 To get a specific class xref:
 
-	$ ruby script/xref.rb test/beanbot.apk -a --cmd xref --cls "com/android/providers/sms/SMSService" [-v] [-g]
+	$ ruby script/xref.rb test/beanbot.apk -a --cmd xref --cls "com.android.providers.sms.SMSService" [-v] [-g]
 
 To get the overall apk services xref:
 
@@ -43,6 +43,8 @@ To get the overall apk activity xref:
 To generate a overall API invoking of a bunch of APKs:
 
     $ ruby script/xref-api-generate.rb --apk path-to-apk-directory --xref path-to-xref-directory -v
+
+*note: if you use --assign, the cls must be the same with the android:name attribute of the corresponding component!*
 
 Reference
 -----

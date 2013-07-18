@@ -42,39 +42,68 @@ class Manifest
   ACT  = "activity"
   ACTV = APP + "/" + ACT
   IFL  = "intent-filter"
-  IFLT = ACTV + "/" + IFL
-  ACN  = "action"
-  ACTN = IFLT + "/" + ACN
-  CTG  = "category"
-  CATG = IFLT + "/" + CTG
+  IFLA = ACTV + "/" + IFL
   SVC = "service"
   SVCV = APP + "/" + SVC
+  IFLS = SVCV + "/" + IFL
   
   NAME = "name"
   PKG  = "package"
   ENABLED = "enabled"
   ANDNAME = "android:name"
+  ANDEXPO = "android:exported"
+  ANDPROC = "android:process"
 
   def initialize(file_name)
     f = File.open(file_name, 'r')
     @doc = Nokogiri::XML(f)
     f.close
     @pkg = @doc.xpath(ROOT)[0][PKG]
-    @svc = Array.new
+    @svc = Hash.new
     services = @doc.xpath(SVCV)
     services.each do |service|
-      svc = service[ANDNAME]
+      svc = service["name"]
+      ept = service["exported"]
+      pro = service["process"]
       if svc != nil
-	@svc << (svc.start_with?('.') ? @pkg + svc : svc)
+        if svc.start_with?('.')
+          path = @pkg + svc
+        elsif !svc.include?('.')
+          path = @pkg + '.' + svc
+        else
+          path = svc
+        end
+        exported = false
+        if ept.eql?("true")
+          exported = true
+        end
+        process = (pro == nil ? "main" : pro)
+      	@svc[svc] = [path.gsub('.', '/'), exported, process]
       end
     end
-    @aty = Array.new
+    sfilters = @doc.xpath(IFLS)
+    sfilters.each do |filter|
+      @svc[filter.parent["name"]][1] = true
+    end
+    @aty = Hash.new
     activities = @doc.xpath(ACTV)
     activities.each do |activity|
-      aty = activity[ANDNAME]
+      aty = activity["name"]
+      ept = activity["exported"]
+      pro = activity["process"]
       if aty != nil
-	@aty << (aty.start_with?('.') ? @pkg + aty : aty)
+        path = aty.start_with?('.') ? @pkg + aty : aty
+        exported = false
+        if ept.eql?("true")
+          exported = true
+        end
+        process = (pro == nil ? "main" : pro)
+	      @aty[aty] = [path, exported, process]
       end
+    end
+    afilters = @doc.xpath(IFLA)
+    afilters.each do |filter|
+      @aty[filter.parent["name"]][1] = true
     end
     @out = ""
   end

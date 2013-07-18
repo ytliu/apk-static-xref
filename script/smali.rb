@@ -82,7 +82,7 @@ class Smali_Function
 end
 
 class Invoked < Smali_Function
-  attr_reader :cls, :mtd, :pty
+  attr_accessor :cls, :mtd, :pty
   def initialize(smali_invoke_line)
     super()
     extractOwnerClass(smali_invoke_line)
