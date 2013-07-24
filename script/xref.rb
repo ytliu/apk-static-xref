@@ -30,6 +30,7 @@ manifest = nil
 assign = false
 #graph_need = false
 $verbose = false
+$verbose2 = false
 
 $caller_methods = Array.new
 $calling_edge = Hash.new
@@ -37,7 +38,6 @@ $calling_edge = Hash.new
 #$graph = GraphViz.new( :G, :type => :digraph )
 
 $libapis = Hash.new
-
 $fields = Hash.new
 
 def close(apk)
@@ -50,22 +50,45 @@ end
 #  $graph.add_edges(node1, node2)
 #end
 
-def parseInvokeInit(line)
-  
-
+def parse_parameters(raw)
+ ret = Array.new
+ i = 0
+ while raw.size > 0
+   case raw[0]
+   when 'Z', 'B', 'C', 'S', 'F', 'I', 'D', 'J'
+     ret[i] = ['P']
+     i += 1
+     raw = raw[1..-1]
+   when 'L'
+     t = raw.index(';')
+     ret[i] = ['L', raw[1..t-1]]
+     i += 1
+     raw = raw[t+1..-1]
+     if raw.size == 0
+       return ret
+     end
+   when '['
+     if raw[1] == 'L'
+       t = raw.index(';')
+       ret[i] = ['L', raw[2..t-1]]
+       i += 1
+       raw = raw[t+1..-1]
+     else
+       ret[i] = ['P']
+       i += 1
+       raw = raw[2..-1]
+     end
+   end
+ end
+ return ret
 end
+
 def run_assign(apk, cls, mtd, pty, flag, ori_cls)
   match = 0
-  initfld = 0
   caller = nil
   callee = nil
   vclass = nil
-  #if (cls.split('/')[-1] =~ /.*[A-Z].*/)
   filename = apk.smali + cls + ".smali" # it is for mac OS
-  #else
-  #  filename = apk.smali + cls + ".2.smali"
-  #end
-  #filename = apk.smali + cls + ".2.smali" # it is for mac OS
   if File.file?(filename)
     fh = File.open(filename, "r")
   else
@@ -74,109 +97,269 @@ def run_assign(apk, cls, mtd, pty, flag, ori_cls)
     end
     return
   end
-  lines = fh.readlines
+  # Start to parse smali file 
+  if $verbose2
+    pp "Enter file: #{filename}"
+  end
+  initfld = 0
   get_method = false
   vbind = Hash.new
+  lines = fh.readlines
   lines.each { |line|
     line = line[0...-1]
-    # assign specific file location to field like Thread, handler...
-    if initfld == 1
-      if line.start_with?(".end method")
-        initfld = 0
-      elsif line =~ /\s*new-instance.*/
-        if vbind[line.split()[1]] == nil
-          vbind[line.split()[1]] = Array.new
-        end
-		    vbind[line.split()[1]][0] = line.split()[2][1..-2]
-	    elsif line =~ /\s*invoke-direct.*<init>.*/
-        vars = line.split('{')[1].split('}')[0].split(',')
-        pnum = vars.size - 1
-      elsif line =~ /\s*iput-object.*/
-        clas = line.split()[3].split('->')[0][1..-2]
-        field = line.split()[3].split('->')[1].split(':')[0]
-        if $fields[clas] == nil
-          pp "#{cls}, #{line}, #{clas}, #{field}"
-          $fields[clas] = Hash.new
-        end
-		    #pp "#{cls}, #{line}, #{clas}, #{field}"
-        if $fields[clas][field] != nil
-          $fields[clas][field] = file if file != nil
-          #pp "#{clas}.#{field} <- #{$fields[clas][field]}"
-        end
-        file = nil
-      end
-    elsif line.start_with?(".class")
+    if line.start_with?(".class")
       vclass = line.split()[-1][1...-1]
       if $fields[vclass] == nil
         $fields[vclass] = Hash.new
-      else
-        initfld = -1
       end
     elsif line.start_with?(".field")
       field = line.split()[-1].split(':')
-      if initfld != -1
-        if field.size > 1
-          if field[1].include?("Ljava/lang/Thread")
-            $fields[vclass][field[0]] = "thread"
-          elsif field[1].include?("Landroid/os/Handler")
-            $fields[vclass][field[0]] = "handler"
-          elsif field[1].include?("Landroid/content/ServiceConnection")
-            $fields[vclass][field[0]] = "serviceConnection"
-          elsif field[1].start_with?('L')
-            $fields[vclass][field[0]] = field[1][1..-2]
+      if field.size > 1
+        if field[1].start_with?('L')
+          $fields[cls][field[0]] = ['L', field[1][1..-2]]
+        elsif field[1].start_with?('[')
+          if field[1].start_with?('[L')
+            $fields[cls][field[0]] = ['L', field[1][2..-2]]
+          else
+            $fields[cls][field[0]] = ['P']
           end
+        else
+          $fields[cls][field[0]] = ['P']
         end
       end
     elsif line.start_with?(".method")
       if line.split()[-1].start_with?("<init>")
+        initfld = 1
         get_method = true
-        initfld = 1 if initfld == 0
+        if $verbose2
+          pp "Enter Method: init"
+        end
+        ret = parse_parameters(line.split()[-1].split('(')[1].split(')')[0])
+        if $verbose2
+          pp "ret: #{ret}"
+        end
+        vbind["p0"] = ['L', cls]
+        for i in 1..ret.size
+          vbind["p#{i}"] = ret[i-1]
+          if $verbose2
+            pp "vbind[p#{i}]: #{vbind["p#{i}"]}"
+          end
+        end
       else
         caller = Invoker.new(vclass, line)
         if (mtd.eql?("doInBackground")) and caller.mtd.eql?(mtd)
-          match = 1
-          get_method = true
+          match, get_method = 1, true
+        elsif (caller.mtd.eql?(mtd)) and (caller.pty.eql?(pty))
+          match, get_method = 1, true
+        elsif flag == 1
+          match, get_method = 1, true
         end
-        if (caller.mtd.eql?(mtd)) and (caller.pty.eql?(pty))
-          match = 1
-          get_method = true
+        if match == 1
+          if $verbose2
+            pp "Enter Method: #{caller.mtd}"
+          end
+          ret = parse_parameters(line.split()[-1].split('(')[1].split(')')[0])
+          if $verbose2
+            pp "ret: #{ret}"
+          end
+          vbind["p0"] = ['L', cls]
+          for i in 1..ret.size
+            vbind["p#{i}"] = ret[i-1]
+            if $verbose2
+              pp "vbind[p#{i}]: #{vbind["p#{i}"]}"
+            end
+          end
         end
       end
     elsif line.start_with?(".end method")
-      match = 0
-    elsif line =~ /\s*iget-object.*/
-      if (match == 1) or (flag == 1)
-        clas = line.split()[3].split('->')[0][1..-2]
-        field = line.split()[3].split('->')[1].split(':')[0]
+      if mtd.eql?("<init>") and initfld == 1
+        return
+      end
+      initfld = 0 if initfld == 1
+      match = 0 if match == 1
+    elsif initfld == 1 or match == 1
+      if $verbose2
+        pp "parse #{line}"
+      end
+      # new-* instruction
+      if line =~ /\s*new-instance.*/
+        if vbind[line.split()[1]] == nil
+          vbind[line.split()[1]] = Array.new
+        end
+        vbind[line.split()[1]] = ['L', line.split()[2][1..-2]]
+        if $verbose2
+          pp "vbind[#{line.split()[1]}]: #{vbind[line.split()[1]]}"
+        end
+      elsif line =~ /\s*new-array.*/
+        type = line.split()[3]
+        if type[1] == 'L'
+          vbind[line.split()[1][0..-2]] = ['L', type[2..-2]]
+          if $verbose2
+            pp "vbind[#{line.split()[1][0..-2]}]: #{vbind[line.split()[1][0..-2]]}"
+          end
+        else
+          vbind[line.split()[1][0..-2]] = ['P']
+        end
+      # move-* instruction
+      elsif line =~ /\s*move-object.*/
+        vbind[line.split()[1]] = vbind[line.split()[2]]
+        if $verbose2
+          pp "vbind[#{line.split()[1]}]: #{vbind[line.split()[1]]}"
+        end
+      elsif line =~ /\s*move-result.*/
+        vbind[line.split()[1]] = vbind["ret-val"]
+        if $verbose2
+          pp "vbind[#{line.split()[1]}]: #{vbind[line.split()[1]]}"
+        end
+      # const* instruction
+      elsif line =~ /\s*const-class.*/
+        vbind[line.split()[1][0..-2]] = ['L', line.split()[2][0..-2]]
+        if $verbose2
+          pp "vbind[#{line.split()[1][0..-2]}]: #{vbind[line.split()[1][0..-2]]}"
+        end
+      elsif line =~ /\s*const.*/ and line.split().size > 2
+        vbind[line.split()[1][0..-2]] = ['P']
+      # .local
+      elsif line =~ /\s*.local\s.*/
+        type = line.split()[2].split(':')[1]
+        if type[0] == 'L'
+          vbind[line.split()[1][0..-2]] = ['L', type[1..-2]]
+        elsif type[0] == '[' and type[1] == 'L'
+          vbind[line.split()[1][0..-2]] = ['L', type[2..-2]]
+        else
+          vbind[line.split()[1][0..-2]] = ['P']
+        end
+        if $verbose2
+          pp "vbind[#{line.split()[1][0..-2]}]: #{vbind[line.split()[1][0..-2]]}"
+        end
+      # [isa]get-* instruction
+      elsif line =~ /\s*[is]get-object.*/
+        if line =~ /\s*iget-object.*/
+          clas = line.split()[3].split('->')[0][1..-2]
+          field = line.split()[3].split('->')[1].split(':')[0]
+          type = line.split()[3].split('->')[1].split(':')[1]
+        else
+          clas = line.split()[2].split('->')[0][1..-2]
+          field = line.split()[2].split('->')[1].split(':')[0]
+          type = line.split()[2].split('->')[1].split(':')[1]
+        end
+        if $fields[clas] == nil
+          run_assign(apk, clas, "<init>", nil, 0, ori_cls)
+        end
+        if $fields[clas][field] == nil
+          if type[0] == 'L'
+            $fields[clas][field] = ['L', type[1..-2]]
+          elsif type[0] == '[' and type[1] == 'L'
+            $fields[clas][field] = ['L', type[2..-2]]
+          else
+            $fields[clas][field] = ['P']
+          end
+        end
+        vbind[line.split()[1][0..-2]] = $fields[clas][field]
+        if $verbose2
+          pp "vbind[#{line.split()[1][0..-2]}]: #{vbind[line.split()[1][0..-2]]}"
+        end
+      elsif line =~ /\s*aget-object.*/
+        vbind[line.split()[1][0..-2]] = vbind[line.split()[2][0..-2]]
+        if $verbose2
+          pp "vbind[#{line.split()[1][0..-2]}]: #{vbind[line.split()[1][0..-2]]}"
+        end
+      elsif line =~ /\s*[asi]get.*/
+        vbind[line.split()[1][0..-2]] = ['P']
+        if $verbose2
+          pp "vbind[#{line.split()[1][0..-2]}]: #{vbind[line.split()[1][0..-2]]}"
+        end
+      # [isa]put-* instruction
+      elsif line =~ /\s*[is]put-object.*/
+        if line =~ /\s*iput-object.*/
+          clas = line.split()[3].split('->')[0][1..-2]
+          field = line.split()[3].split('->')[1].split(':')[0]
+        else
+          clas = line.split()[2].split('->')[0][1..-2]
+          field = line.split()[2].split('->')[1].split(':')[0]
+          if $fields[clas] == nil
+            pp "#{cls}, #{line}, #{clas}, #{field}"
+            $fields[clas] = Hash.new
+          end
+          $fields[clas][field] = vbind[line.split()[1][0..-2]]
+          if $verbose2
+            pp "$filed[#{clas}][#{field}]: #{$fields[clas][field]}"
+          end
+        end
+      elsif line =~ /\s*aput-object.*/
+        vbind[line.split()[2][0..-2]] = vbind[line.split()[1][0..-2]]
+        if $verbose2
+          pp "vbind[#{line.split()[2][0..-2]}]: #{vbind[line.split()[2][0..-2]]}"
+        end
+      elsif line =~ /\s*[si]put.*/
+        clas = line.split()[-1].split('->')[0][1..-2]
+        field = line.split()[-1].split('->')[1].split(':')[0]
         if $fields[clas] == nil
           $fields[clas] = Hash.new
         end
-        file = $fields[clas][field]
-      end
-    elsif line =~ /\s*new-instance.*/
-      if (match == 1) or (flag == 1)
-        file = line.split()[-1][1..-2]
-      end
-    elsif line.include?("invoke-")
-      if (match == 1) or (flag == 1)
+        $fields[clas][field] = ['P']
+        if $verbose2
+          pp "$filed[#{clas}][#{field}]: #{$fields[clas][field]}"
+        end
+      elsif line =~ /\s*aput.*/
+        vbind[line.split()[2][0..-2]] = ['P']
+        if $verbose2
+          pp "vbind[#{line.split()[2][0..-2]}]: #{vbind[line.split()[2][0..-2]]}"
+        end
+      # invoke-* instruction
+      elsif line =~ /\s*invoke-.*/
+        # get parameters of the method invoke
+        vars = Array.new
+        # specific situation for range call
+        if line =~ /\s*invoke-.*\/range.*/
+          vtotal = line.split('{')[1].split('}')[0].split(" .. ")
+          vstart = vtotal[0][1..-1].to_i
+          vend = vtotal[1][1..-1].to_i
+          (vstart..vend).map {|i| vars << "v#{i}"}
+        else
+          vars = line.split('{')[1].split('}')[0].split(', ')
+        end
+        if $verbose2
+          pp "vars: #{vars}"
+        end
+        # init method for some special method like Thread.init, Handler.init...
+        if line =~ /\s*invoke-direct.*<init>.*/
+          pnum = vars.size - 1
+          vbind[vars[0]][2] = pnum
+          for i in 1..pnum
+            vbind[vars[0]][i+2] = vbind[vars[i]]
+          end
+          if $verbose2
+            pp "vbind[#{vars[0]}]: #{vbind[vars[0]]}"
+          end
+        end
+        # get return type for "move-result-*" instructions
+        retType = line.split(')')[-1]
+        if retType[0] == 'L'
+          vbind["ret-val"] = ['L', retType[1..-2]]
+        elsif retType[0] == '[' and retType[1] == 'L'
+          vbind["ret-val"] = ['L', retType[2..-2]]
+        else
+          vbind["ret-val"] = ['P']
+        end
+        if $verbose2
+          pp "vbind[ret-val]: #{vbind["ret-val"]}"
+        end
+        # start to analysis the method invoke
         callee = Invoked.new(line)
-        if (callee.str.eql?("java/lang/Thread->start()V"))
-          callee.cls = file
+        if callee.str =~ /.*java\/lang\/Thread->start\(\)V.*/
+          callee.cls = vbind[vars[0]][3][1]
           callee.mtd = "run"
           callee.pty = "()V"
-        elsif (callee.str.eql?("android/os/Handler->sendMessage(Landroid/os/Message;)Z"))
-          callee.cls = file
+        elsif callee.str =~ /.*android\/os\/Handler->send.*Message\(.*\)Z.*/
+          callee.cls = vbind[vars[0]][1]
           callee.mtd = "handleMessage"
           callee.pty = "(Landroid/os/Message;)V"
-        elsif (callee.str.eql?("android/os/Handler->sendEmptyMessage(I)Z"))
-          callee.cls = file
-          callee.mtd = "handleMessage"
-          callee.pty = "(Landroid/os/Message;)V"
-        elsif (callee.str =~ /.*->execute\(\[Ljava\/lang\/Object;\)Landroid\/os\/AsyncTask;/)
+        elsif callee.str =~ /.*->execute\(\[Ljava\/lang\/Object;\)Landroid\/os\/AsyncTask;/
           callee.mtd = "doInBackground"
           callee.pty = ""
-        elsif (callee.str =~ /.*->execute\(Ljava\/lang\/Runnable;\)V/)
-          callee.cls = file
+        elsif callee.str =~ /.*->execute\(Ljava\/lang\/Runnable;\)V/
+          callee.cls = vbind[vars[1]][1]
           callee.mtd = "run"
           callee.pty = "()V"
         elsif (callee.str =~ /.*->start\(\)V/)
@@ -192,7 +375,7 @@ def run_assign(apk, cls, mtd, pty, flag, ori_cls)
         end
 #        addNodes(caller.str, callee.str) if $graph_need
         if $verbose
-          #pp "#{caller.str} : #{callee.str}"
+          pp "#{caller.str} : #{callee.str}"
         end
         if !$caller_methods.include?(callee.str)
           $caller_methods << caller.str
@@ -305,13 +488,16 @@ option_parser = OptionParser.new do |opts|
   opts.on("-v", "--verbose", "print debug information") do
     $verbose = true
   end
+  opts.on("-v2", "--verbose2", "print more debug information") do
+    $verbose2 = true
+  end
 #  opts.on("-g", "--graph", "output graph file") do
 #    $graph_need = true
 #  end
-  opts.on_tail("-h", "--help", "show this message") do
-    puts opts
-    exit
-  end
+opts.on_tail("-h", "--help", "show this message") do
+  puts opts
+  exit
+end
 end.parse!
 
 if (cmd == "xref") and assign
